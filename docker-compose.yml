@@ -9,11 +9,14 @@ services:
         condition: service_healthy
       order-service-app:
         condition: service_healthy
+      payment-service-app:
+        condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: docker
       AUTH_SERVICE_URL: http://auth-service-app:8081
       USER_SERVICE_URL: http://user-service-app:8082
       ORDER_SERVICE_URL: http://order-service-app:8083
+      PAYMENT_SERVICE_URL: http://payment-service-app:8084
     ports:
       - "8080:8080"
     networks:
@@ -34,6 +37,7 @@ services:
       DB_USERNAME: ${AUTH_POSTGRES_USER}
       DB_PASSWORD: ${AUTH_POSTGRES_PASSWORD}
       USER_SERVICE_URL: http://user-service-app:8082
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is not set}
       JWT_KEY_ID: ${JWT_KEY_ID:-auth-service-1}
       JWT_PRIVATE_KEY_PATH: keys/jwt-private.pem
       JWT_PUBLIC_KEY_PATH: keys/jwt-public.pem
@@ -64,6 +68,8 @@ services:
       DB_USERNAME: ${USER_POSTGRES_USER}
       DB_PASSWORD: ${USER_POSTGRES_PASSWORD}
       REDIS_HOST: user-redis
+      AUTH_SERVICE_URL: http://auth-service-app:8081
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is not set}
     expose:
       - "8082"
     networks:
@@ -82,6 +88,8 @@ services:
         condition: service_healthy
       order-redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SERVER_PORT: 8083
@@ -89,6 +97,9 @@ services:
       DB_USERNAME: ${ORDER_POSTGRES_USER}
       DB_PASSWORD: ${ORDER_POSTGRES_PASSWORD}
       REDIS_HOST: order-redis
+      USER_SERVICE_URL: http://user-service-app:8082
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is not set}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     expose:
       - "8083"
     networks:
@@ -97,6 +108,73 @@ services:
       test: ["CMD-SHELL", "curl -fs http://localhost:8083/actuator/health || exit 1"]
       interval: 10s
       timeout: 5s
+      retries: 10
+
+  payment-service-app:
+    build: ../payment-service
+    container_name: payment-service-app
+    depends_on:
+      payment-mongo:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      user-service-app:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SERVER_PORT: 8084
+      MONGO_URI: mongodb://${PAYMENT_MONGO_USER}:${PAYMENT_MONGO_PASSWORD}@payment-mongo:27017/${PAYMENT_MONGO_DB}?authSource=admin
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      USER_SERVICE_URL: http://user-service-app:8082
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN is not set}
+    expose:
+      - "8084"
+    networks:
+      - innoboard-internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8084/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  payment-mongo:
+    image: mongo:8.0
+    container_name: payment-service-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${PAYMENT_MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${PAYMENT_MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: ${PAYMENT_MONGO_DB}
+    volumes:
+      - payment-mongo-data:/data/db
+    networks:
+      - innoboard-internal
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u $$MONGO_INITDB_ROOT_USERNAME -p $$MONGO_INITDB_ROOT_PASSWORD --eval 'db.adminCommand(\"ping\").ok' | grep 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:4.0.0
+    container_name: innoboard-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - innoboard-internal
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
       retries: 10
 
   auth-postgres:
@@ -173,6 +251,7 @@ services:
       retries: 10
 
 volumes:
+  payment-mongo-data:
   auth-postgres-data:
   user-postgres-data:
   order-postgres-data:

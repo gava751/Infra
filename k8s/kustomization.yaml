@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: innoboard
+
+resources:
+  - namespace.yaml
+  - config.yaml
+  - infrastructure/postgres.yaml
+  - infrastructure/mongo.yaml
+  - infrastructure/redis.yaml
+  - infrastructure/kafka.yaml
+  - apps/api-gateway.yaml
+  - apps/auth-service.yaml
+  - apps/user-service.yaml
+  - apps/order-service.yaml
+  - apps/payment-service.yaml
+  - ingress.yaml
+
+secretGenerator:
+  - name: innoboard-secrets
+    envs:
+      - secrets.env
+  - name: jwt-keys
+    files:
+      - keys/jwt-private.pem
+      - keys/jwt-public.pem
+
+generatorOptions:
+  disableNameSuffixHash: true
